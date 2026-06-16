@@ -21,16 +21,17 @@ def ensure_config_dir():
 
 def load_config():
     if not os.path.exists(CONFIG_PATH):
-        return {"token": "", "refresh_seconds": 300}
+        return {"token": "", "refresh_seconds": 300, "current_vip_id": 7}
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
         return {
             "token": data.get("token", ""),
             "refresh_seconds": int(data.get("refresh_seconds", 300)),
+            "current_vip_id": int(data.get("current_vip_id", 7)),
         }
     except Exception:
-        return {"token": "", "refresh_seconds": 300}
+        return {"token": "", "refresh_seconds": 300, "current_vip_id": 7}
 
 
 def save_config(config):
@@ -345,6 +346,7 @@ def build_vip_rows(user_data, vip_data):
         high_ratio = f"{high_used} / {high_total} 次" if high_total else "-- / --"
         free_ratio = f"{free_used} / {free_total} 次" if free_total else "-- / --"
         rows.append({
+            "id": plan.get("id"),
             "title": str(plan.get("title", "未知套餐")),
             "price": str(plan.get("pay_amount", "")),
             "days": normalize_number(plan.get("end_time")),
@@ -359,9 +361,13 @@ def build_vip_rows(user_data, vip_data):
     return rows
 
 
-def choose_active_row(rows):
+def choose_active_row(rows, current_vip_id=None):
     if not rows:
         return None
+    if current_vip_id is not None:
+        for row in rows:
+            if str(row["id"]) == str(current_vip_id):
+                return row
     used_rows = [row for row in rows if row["high_total"] and row["high_used"] <= row["high_total"] and row["high_used"] > 0]
     if used_rows:
         return min(used_rows, key=lambda row: row["high_total"])
@@ -369,12 +375,12 @@ def choose_active_row(rows):
     return nonzero_rows[0] if nonzero_rows else rows[0]
 
 
-def summarize(user_data, vip_data):
+def summarize(user_data, vip_data, current_vip_id=None):
     flat = flatten_json(user_data)
     plan = find_plan(user_data, vip_data)
     plan_flat = flatten_json(plan) if plan else []
     vip_rows = build_vip_rows(user_data, vip_data)
-    active_row = choose_active_row(vip_rows)
+    active_row = choose_active_row(vip_rows, current_vip_id)
     name = pick_field(flat, ["nickname", "name", "username"]) or pick_field(flat, ["email"]) or "ZCHAT"
     email = pick_field(flat, ["email"]) or ""
     vip_name = (
@@ -548,7 +554,7 @@ class QuotaApp(tk.Tk):
             vip_payload = api_post("api/get_vip_level", token)
             user_data = unwrap_response(user_payload)
             vip_data = unwrap_response(vip_payload)
-            result = summarize(user_data, vip_data)
+            result = summarize(user_data, vip_data, self.config_data.get("current_vip_id", 7))
             self.after(0, lambda: self.apply_result(result))
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -601,7 +607,7 @@ class QuotaApp(tk.Tk):
             self.vip_tree.insert(
                 "",
                 "end",
-                values=(row["title"], row["price"], row["high_ratio"], row["free_ratio"]),
+                values=(f'{row["title"]} (ID {row["id"]})', row["price"], row["high_ratio"], row["free_ratio"]),
                 tags=tags,
             )
 
@@ -614,7 +620,7 @@ class QuotaApp(tk.Tk):
     def open_settings(self):
         dialog = tk.Toplevel(self)
         dialog.title("设置")
-        dialog.geometry("520x360")
+        dialog.geometry("520x420")
         dialog.transient(self)
         dialog.grab_set()
 
@@ -629,6 +635,10 @@ class QuotaApp(tk.Tk):
         interval_var = tk.StringVar(value=str(self.config_data.get("refresh_seconds", 300)))
         ttk.Entry(frame, textvariable=interval_var).pack(fill="x", pady=(8, 12))
 
+        ttk.Label(frame, text="当前套餐 ID（基础月卡是 7）：").pack(anchor="w")
+        vip_var = tk.StringVar(value=str(self.config_data.get("current_vip_id", 7)))
+        ttk.Entry(frame, textvariable=vip_var).pack(fill="x", pady=(8, 12))
+
         help_text = (
             "获取 token 的一种方式：登录 zchat 后，在该网页按 F12，Console 输入 "
             "document.cookie，然后复制 token= 后面的值。程序只把 token 保存在本机。"
@@ -642,10 +652,11 @@ class QuotaApp(tk.Tk):
             token = clean_token(token_text.get("1.0", "end"))
             try:
                 seconds = max(30, int(interval_var.get().strip()))
+                current_vip_id = int(vip_var.get().strip())
             except ValueError:
-                messagebox.showerror("设置错误", "刷新间隔必须是数字。")
+                messagebox.showerror("设置错误", "刷新间隔和当前套餐 ID 必须是数字。")
                 return
-            self.config_data = {"token": token, "refresh_seconds": seconds}
+            self.config_data = {"token": token, "refresh_seconds": seconds, "current_vip_id": current_vip_id}
             save_config(self.config_data)
             dialog.destroy()
             self.refresh()
