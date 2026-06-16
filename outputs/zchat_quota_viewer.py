@@ -331,15 +331,56 @@ def quota_from_plan(plan, prefixes):
     return normalize_number(pick_field(flat, total_names))
 
 
+def build_vip_rows(user_data, vip_data):
+    rows = []
+    if not isinstance(vip_data, list):
+        return rows
+    high_used = normalize_number(user_data.get("gpt4_send")) or 0
+    free_used = normalize_number(user_data.get("gpt35_send")) or 0
+    for plan in vip_data:
+        if not isinstance(plan, dict):
+            continue
+        high_total = normalize_number(plan.get("gpt4_send_limit")) or 0
+        free_total = normalize_number(plan.get("gpt35_send_limit")) or 0
+        high_ratio = f"{high_used} / {high_total} 次" if high_total else "-- / --"
+        free_ratio = f"{free_used} / {free_total} 次" if free_total else "-- / --"
+        rows.append({
+            "title": str(plan.get("title", "未知套餐")),
+            "price": str(plan.get("pay_amount", "")),
+            "days": normalize_number(plan.get("end_time")),
+            "level": normalize_number(plan.get("level")),
+            "high_used": high_used,
+            "high_total": high_total,
+            "free_used": free_used,
+            "free_total": free_total,
+            "high_ratio": high_ratio,
+            "free_ratio": free_ratio,
+        })
+    return rows
+
+
+def choose_active_row(rows):
+    if not rows:
+        return None
+    used_rows = [row for row in rows if row["high_total"] and row["high_used"] <= row["high_total"] and row["high_used"] > 0]
+    if used_rows:
+        return min(used_rows, key=lambda row: row["high_total"])
+    nonzero_rows = [row for row in rows if row["high_total"]]
+    return nonzero_rows[0] if nonzero_rows else rows[0]
+
+
 def summarize(user_data, vip_data):
     flat = flatten_json(user_data)
     plan = find_plan(user_data, vip_data)
     plan_flat = flatten_json(plan) if plan else []
+    vip_rows = build_vip_rows(user_data, vip_data)
+    active_row = choose_active_row(vip_rows)
     name = pick_field(flat, ["nickname", "name", "username"]) or pick_field(flat, ["email"]) or "ZCHAT"
     email = pick_field(flat, ["email"]) or ""
     vip_name = (
         pick_field(flat, ["vip_title", "vip_name", "vip_level", "level_name"])
         or pick_field(plan_flat, ["title", "name", "vip_title", "vip_name"])
+        or (active_row["title"] if active_row else None)
         or "未识别"
     )
     expire = (
@@ -361,6 +402,13 @@ def summarize(user_data, vip_data):
     high_total = high_total if high_total is not None else found_high_total
     free_used = free_used if free_used is not None else found_free_used
     free_total = free_total if free_total is not None else found_free_total
+    if active_row:
+        high_used = active_row["high_used"]
+        high_total = active_row["high_total"]
+        free_used = active_row["free_used"]
+        free_total = active_row["free_total"]
+        if expire == "未知" and active_row["days"]:
+            expire = f"有效期 {active_row['days']} 天"
     high_total = high_total or quota_from_plan(plan, ["advanced", "advance", "high", "vip", "gpt", "premium"])
     free_total = free_total or quota_from_plan(plan, ["free", "normal", "basic"])
 
@@ -374,6 +422,8 @@ def summarize(user_data, vip_data):
         "high_total": high_total,
         "free_used": free_used,
         "free_total": free_total,
+        "vip_rows": vip_rows,
+        "active_title": active_row["title"] if active_row else "",
         "quota_lines": find_quota_lines(combined),
         "raw_user": user_data,
         "raw_vip": vip_data,
@@ -440,12 +490,20 @@ class QuotaApp(tk.Tk):
         details.pack(fill="both", expand=True, padx=16, pady=(10, 16))
         detail_row = ttk.Frame(details, style="Card.TFrame")
         detail_row.pack(fill="x")
-        ttk.Label(detail_row, text="接口返回的额度相关字段", style="CardTitle.TLabel").pack(side="left")
+        ttk.Label(detail_row, text="VIP 额度表", style="CardTitle.TLabel").pack(side="left")
         ttk.Button(detail_row, text="复制原始数据", command=self.copy_raw).pack(side="right")
-        self.detail_text = scrolledtext.ScrolledText(details, height=10, wrap="word", font=("Consolas", 9), bg="#f8fafc", relief="flat")
-        self.detail_text.pack(fill="both", expand=True, pady=(10, 0))
-        self.detail_text.insert("1.0", "刷新后这里会列出额度、余额、用量相关字段。")
-        self.detail_text.configure(state="disabled")
+        columns = ("title", "price", "high", "free")
+        self.vip_tree = ttk.Treeview(details, columns=columns, show="headings", height=7)
+        self.vip_tree.heading("title", text="套餐")
+        self.vip_tree.heading("price", text="价格")
+        self.vip_tree.heading("high", text="高级额度")
+        self.vip_tree.heading("free", text="免费额度")
+        self.vip_tree.column("title", width=150, anchor="w")
+        self.vip_tree.column("price", width=70, anchor="center")
+        self.vip_tree.column("high", width=115, anchor="center")
+        self.vip_tree.column("free", width=115, anchor="center")
+        self.vip_tree.tag_configure("active", background="#e8f3ff")
+        self.vip_tree.pack(fill="both", expand=True, pady=(10, 0))
 
     def create_quota_card(self, title):
         frame = ttk.Frame(self, padding=16, style="Card.TFrame")
@@ -517,7 +575,7 @@ class QuotaApp(tk.Tk):
         self.balance_label.configure(text=f"余额：{result['balance']}")
         self.update_quota_card(self.high_card, result["high_used"], result["high_total"])
         self.update_quota_card(self.free_card, result["free_used"], result["free_total"])
-        self.render_details(result["quota_lines"])
+        self.render_vip_rows(result["vip_rows"], result["active_title"])
 
     def update_quota_card(self, card, used, total):
         if total is not None and used is None:
@@ -536,15 +594,16 @@ class QuotaApp(tk.Tk):
         card.progress.configure(value=percent)
         card.remain_label.configure(text=f"剩余 {remain} 次 · 已用 {percent:.0f}%")
 
-    def render_details(self, rows):
-        self.detail_text.configure(state="normal")
-        self.detail_text.delete("1.0", "end")
-        if not rows:
-            self.detail_text.insert("1.0", "没有发现明显的额度字段。可以点“复制原始数据”发给 Codex 继续适配字段名。")
-        else:
-            lines = [f"{key}: {value}" for key, value in rows]
-            self.detail_text.insert("1.0", "\n".join(lines))
-        self.detail_text.configure(state="disabled")
+    def render_vip_rows(self, rows, active_title):
+        self.vip_tree.delete(*self.vip_tree.get_children())
+        for row in rows:
+            tags = ("active",) if row["title"] == active_title else ()
+            self.vip_tree.insert(
+                "",
+                "end",
+                values=(row["title"], row["price"], row["high_ratio"], row["free_ratio"]),
+                tags=tags,
+            )
 
     def show_error(self, text):
         self.loading = False
