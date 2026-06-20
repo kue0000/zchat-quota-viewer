@@ -7,6 +7,7 @@
 - 主界面像流量卡一样显示剩余高级额度
 - 下方展示完整 VIP 额度表
 - “迷你窗”可以常驻屏幕角落
+- 默认启动后会显示迷你窗；也可以在设置中关闭
 - 可以设置高级额度和余额告警
 - 设置中可以选择自动识别套餐，或手动填写当前套餐 ID
 
@@ -36,4 +37,20 @@ document.cookie
 
 ```text
 %APPDATA%\ZchatQuotaViewer\config.json
+```
+
+## 一键 EXE
+
+开源版本保留 `.py` 和 `.bat`。
+
+面向普通用户的单文件 EXE 可以通过仓库里的 GitHub Actions 构建，也可以本地运行根目录的：
+
+```powershell
+build_exe.bat
+```
+
+产物位置：
+
+```text
+dist\ZchatQuotaViewer.exe
 ```

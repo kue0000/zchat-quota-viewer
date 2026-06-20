@@ -25,6 +25,8 @@ DEFAULT_CONFIG = {
     "alert_balance_below": 10.0,
     "alerts_enabled": True,
     "start_minimized": False,
+    "show_mini_on_start": True,
+    "mini_topmost": True,
 }
 
 VIP_IDS = {
@@ -54,6 +56,8 @@ def load_config():
         config["alert_balance_below"] = float(config.get("alert_balance_below", DEFAULT_CONFIG["alert_balance_below"]))
         config["alerts_enabled"] = bool(config.get("alerts_enabled", DEFAULT_CONFIG["alerts_enabled"]))
         config["start_minimized"] = bool(config.get("start_minimized", DEFAULT_CONFIG["start_minimized"]))
+        config["show_mini_on_start"] = bool(config.get("show_mini_on_start", DEFAULT_CONFIG["show_mini_on_start"]))
+        config["mini_topmost"] = bool(config.get("mini_topmost", DEFAULT_CONFIG["mini_topmost"]))
     except Exception:
         return dict(DEFAULT_CONFIG)
     return config
@@ -172,6 +176,32 @@ def quota_percent(used, total):
     return max(0, min(100, float(used) / float(total) * 100))
 
 
+class QuotaRing(tk.Canvas):
+    def __init__(self, parent, size=132, **kwargs):
+        super().__init__(parent, width=size, height=size, bg=kwargs.get("bg", "#ffffff"), highlightthickness=0)
+        self.size = size
+        self.percent = 0
+        self.text = "--"
+        self.draw()
+
+    def set_value(self, remaining, total):
+        if total:
+            self.percent = max(0, min(100, float(remaining) / float(total) * 100))
+        else:
+            self.percent = 0
+        self.text = str(remaining) if remaining is not None else "--"
+        self.draw()
+
+    def draw(self):
+        self.delete("all")
+        pad = 10
+        extent = max(0, min(359.9, self.percent / 100 * 360))
+        self.create_oval(pad, pad, self.size - pad, self.size - pad, outline="#e5e7eb", width=12)
+        self.create_arc(pad, pad, self.size - pad, self.size - pad, start=90, extent=-extent, outline="#2563eb", width=12, style="arc")
+        self.create_text(self.size / 2, self.size / 2 - 5, text=self.text, fill="#0f172a", font=("Microsoft YaHei UI", 26, "bold"))
+        self.create_text(self.size / 2, self.size / 2 + 26, text="剩余", fill="#64748b", font=("Microsoft YaHei UI", 9))
+
+
 def quota_summary(user, vip_levels, config):
     rows = build_vip_rows(user, vip_levels)
     active, source = choose_active_row(rows, user, config)
@@ -201,28 +231,41 @@ class MiniWindow(tk.Toplevel):
         super().__init__(parent)
         self.parent = parent
         self.title("ZCHAT Mini")
-        self.geometry("260x150")
+        self.geometry("300x168")
         self.resizable(False, False)
-        self.attributes("-topmost", True)
+        self.configure(bg="#111827")
+        self.attributes("-topmost", parent.config_data.get("mini_topmost", True))
         self.protocol("WM_DELETE_WINDOW", self.withdraw)
-        frame = ttk.Frame(self, padding=12)
+        frame = tk.Frame(self, bg="#111827", padx=16, pady=14)
         frame.pack(fill="both", expand=True)
-        self.title_label = ttk.Label(frame, text="ZCHAT", font=("Microsoft YaHei UI", 13, "bold"))
+        self.title_label = tk.Label(frame, text="ZCHAT", fg="#e5e7eb", bg="#111827", font=("Microsoft YaHei UI", 12, "bold"))
         self.title_label.pack(anchor="w")
-        self.high_label = ttk.Label(frame, text="高级额度 -- / --", font=("Microsoft YaHei UI", 11))
-        self.high_label.pack(anchor="w", pady=(12, 0))
-        self.free_label = ttk.Label(frame, text="免费额度 -- / --", font=("Microsoft YaHei UI", 10))
-        self.free_label.pack(anchor="w", pady=(6, 0))
-        self.balance_label = ttk.Label(frame, text="余额 --", font=("Microsoft YaHei UI", 10))
-        self.balance_label.pack(anchor="w", pady=(6, 0))
+        self.high_label = tk.Label(frame, text="-- 次剩余", fg="#ffffff", bg="#111827", font=("Microsoft YaHei UI", 24, "bold"))
+        self.high_label.pack(anchor="w", pady=(6, 0))
+        self.detail_label = tk.Label(frame, text="高级额度 -- / --", fg="#93c5fd", bg="#111827", font=("Microsoft YaHei UI", 10))
+        self.detail_label.pack(anchor="w")
+        self.free_label = tk.Label(frame, text="免费额度 -- / --", fg="#cbd5e1", bg="#111827", font=("Microsoft YaHei UI", 9))
+        self.free_label.pack(anchor="w", pady=(8, 0))
+        self.balance_label = tk.Label(frame, text="余额 --", fg="#cbd5e1", bg="#111827", font=("Microsoft YaHei UI", 9))
+        self.balance_label.pack(anchor="w")
+        self.position_near_corner()
         self.withdraw()
+
+    def position_near_corner(self):
+        self.update_idletasks()
+        width = self.winfo_width() or 300
+        height = self.winfo_height() or 168
+        x = max(0, self.winfo_screenwidth() - width - 28)
+        y = 72
+        self.geometry(f"{width}x{height}+{x}+{y}")
 
     def update_data(self, data):
         active = data.get("active")
         if not active:
             return
         self.title_label.configure(text=active["title"])
-        self.high_label.configure(text=f"高级额度 {active['high_used']} / {active['high_total']} 次")
+        self.high_label.configure(text=f"{data['high_remaining']} 次剩余")
+        self.detail_label.configure(text=f"高级额度 {active['high_used']} / {active['high_total']} 次")
         self.free_label.configure(text=f"免费额度 {active['free_used']} / {active['free_total']} 次")
         self.balance_label.configure(text=f"余额 {data['balance'] if data['balance'] is not None else '--'}")
 
@@ -231,9 +274,9 @@ class QuotaApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("720x760")
-        self.minsize(640, 640)
-        self.configure(bg="#eef2f7")
+        self.geometry("760x800")
+        self.minsize(680, 680)
+        self.configure(bg="#f3f6fb")
         self.config_data = load_config()
         self.loading = False
         self.after_id = None
@@ -241,6 +284,8 @@ class QuotaApp(tk.Tk):
         self.last_alert_key = None
         self.mini = None
         self.create_widgets()
+        if self.config_data.get("show_mini_on_start", True):
+            self.after(300, self.show_mini)
         if self.config_data.get("start_minimized"):
             self.after(200, self.withdraw)
         self.refresh()
@@ -249,16 +294,18 @@ class QuotaApp(tk.Tk):
     def create_widgets(self):
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("TFrame", background="#eef2f7")
+        style.configure("TFrame", background="#f3f6fb")
         style.configure("Card.TFrame", background="#ffffff", relief="flat")
-        style.configure("TButton", padding=8)
-        style.configure("Title.TLabel", background="#ffffff", foreground="#0f172a", font=("Microsoft YaHei UI", 22, "bold"))
+        style.configure("Hero.TFrame", background="#ffffff", relief="flat")
+        style.configure("TButton", padding=(12, 8), font=("Microsoft YaHei UI", 9))
+        style.configure("Title.TLabel", background="#ffffff", foreground="#0f172a", font=("Microsoft YaHei UI", 24, "bold"))
         style.configure("Muted.TLabel", background="#ffffff", foreground="#64748b", font=("Microsoft YaHei UI", 9))
         style.configure("Section.TLabel", background="#ffffff", foreground="#334155", font=("Microsoft YaHei UI", 11, "bold"))
-        style.configure("Metric.TLabel", background="#ffffff", foreground="#0f172a", font=("Microsoft YaHei UI", 28, "bold"))
+        style.configure("Metric.TLabel", background="#ffffff", foreground="#0f172a", font=("Microsoft YaHei UI", 34, "bold"))
         style.configure("SubMetric.TLabel", background="#ffffff", foreground="#475569", font=("Microsoft YaHei UI", 11))
+        style.configure("Pill.TLabel", background="#dbeafe", foreground="#1d4ed8", font=("Microsoft YaHei UI", 9, "bold"), padding=(10, 4))
 
-        shell = ttk.Frame(self, padding=16)
+        shell = ttk.Frame(self, padding=18)
         shell.pack(fill="both", expand=True)
 
         header = ttk.Frame(shell, padding=18, style="Card.TFrame")
@@ -277,18 +324,24 @@ class QuotaApp(tk.Tk):
         ttk.Button(actions, text="设置", command=self.open_settings).grid(row=1, column=0, padx=4, pady=3)
         ttk.Button(actions, text="复制数据", command=self.copy_raw).grid(row=1, column=1, padx=4, pady=3)
 
-        self.plan_card = ttk.Frame(shell, padding=18, style="Card.TFrame")
+        self.plan_card = ttk.Frame(shell, padding=22, style="Hero.TFrame")
         self.plan_card.pack(fill="x", pady=(14, 0))
-        self.plan_label = ttk.Label(self.plan_card, text="当前套餐 --", style="Section.TLabel")
+        hero_left = ttk.Frame(self.plan_card, style="Hero.TFrame")
+        hero_left.pack(side="left", fill="both", expand=True)
+        self.plan_label = ttk.Label(hero_left, text="当前套餐 --", style="Section.TLabel")
         self.plan_label.pack(anchor="w")
-        self.high_value = ttk.Label(self.plan_card, text="-- / -- 次", style="Metric.TLabel")
-        self.high_value.pack(anchor="w", pady=(10, 0))
-        self.high_bar = ttk.Progressbar(self.plan_card, maximum=100)
-        self.high_bar.pack(fill="x", pady=(10, 0))
-        self.high_detail = ttk.Label(self.plan_card, text="高级额度等待刷新", style="SubMetric.TLabel")
-        self.high_detail.pack(anchor="w", pady=(8, 0))
-        self.free_detail = ttk.Label(self.plan_card, text="免费额度等待刷新", style="Muted.TLabel")
-        self.free_detail.pack(anchor="w", pady=(5, 0))
+        self.high_value = ttk.Label(hero_left, text="-- 次", style="Metric.TLabel")
+        self.high_value.pack(anchor="w", pady=(8, 0))
+        self.high_detail = ttk.Label(hero_left, text="高级额度等待刷新", style="SubMetric.TLabel")
+        self.high_detail.pack(anchor="w", pady=(4, 0))
+        self.free_detail = ttk.Label(hero_left, text="免费额度等待刷新", style="Muted.TLabel")
+        self.free_detail.pack(anchor="w", pady=(10, 0))
+        self.status_pill = ttk.Label(hero_left, text="等待刷新", style="Pill.TLabel")
+        self.status_pill.pack(anchor="w", pady=(14, 0))
+        hero_right = ttk.Frame(self.plan_card, style="Hero.TFrame")
+        hero_right.pack(side="right", padx=(18, 0))
+        self.quota_ring = QuotaRing(hero_right, size=142)
+        self.quota_ring.pack()
 
         info = ttk.Frame(shell, padding=18, style="Card.TFrame")
         info.pack(fill="x", pady=(14, 0))
@@ -311,6 +364,7 @@ class QuotaApp(tk.Tk):
             self.vip_tree.heading(col, text=headings[col])
             self.vip_tree.column(col, width=widths[col], anchor="center" if col != "title" else "w")
         self.vip_tree.tag_configure("active", background="#dff0ff")
+        self.vip_tree.tag_configure("warning", background="#fff7ed")
         self.vip_tree.pack(fill="both", expand=True, pady=(10, 0))
 
     def schedule_next(self):
@@ -362,10 +416,14 @@ class QuotaApp(tk.Tk):
             high_remaining = data["high_remaining"]
             free_remaining = data["free_remaining"]
             self.plan_label.configure(text=f"当前套餐：{active['title']} (ID {active['id']})")
-            self.high_value.configure(text=f"{high_remaining} 次剩余")
-            self.high_bar.configure(value=100 - high_percent)
+            self.high_value.configure(text=f"{high_remaining} 次")
+            self.quota_ring.set_value(high_remaining, active["high_total"])
             self.high_detail.configure(text=f"高级额度 {active['high_used']} / {active['high_total']} 次 · 已用 {high_percent:.0f}%")
             self.free_detail.configure(text=f"免费额度 {active['free_used']} / {active['free_total']} 次 · 剩余 {free_remaining} 次")
+            if high_remaining <= self.config_data.get("alert_high_remaining", 20):
+                self.status_pill.configure(text="额度偏低")
+            else:
+                self.status_pill.configure(text="额度充足")
         self.balance_label.configure(text=f"余额：{data['balance'] if data['balance'] is not None else '--'}")
         source_text = {"auto": "接口自动", "manual": "手动 ID", "fallback": "回退首项", "none": "未识别"}.get(data["plan_source"], data["plan_source"])
         self.source_label.configure(text=f"套餐识别：{source_text}")
@@ -378,7 +436,9 @@ class QuotaApp(tk.Tk):
         active = data.get("active") or {}
         self.vip_tree.delete(*self.vip_tree.get_children())
         for row in data.get("rows", []):
-            tags = ("active",) if row["id"] == active.get("id") else ()
+            tags = ()
+            if row["id"] == active.get("id"):
+                tags = ("active",)
             self.vip_tree.insert(
                 "",
                 "end",
@@ -427,11 +487,19 @@ class QuotaApp(tk.Tk):
         if self.mini is None or not self.mini.winfo_exists():
             self.mini = MiniWindow(self)
         if self.mini.state() == "withdrawn":
-            self.mini.deiconify()
-            if self.last_payload:
-                self.mini.update_data(self.last_payload)
+            self.show_mini()
         else:
             self.mini.withdraw()
+
+    def show_mini(self):
+        if self.mini is None or not self.mini.winfo_exists():
+            self.mini = MiniWindow(self)
+        self.mini.attributes("-topmost", self.config_data.get("mini_topmost", True))
+        self.mini.position_near_corner()
+        self.mini.deiconify()
+        self.mini.lift()
+        if self.last_payload:
+            self.mini.update_data(self.last_payload)
 
     def open_settings(self):
         dialog = tk.Toplevel(self)
@@ -476,6 +544,10 @@ class QuotaApp(tk.Tk):
         ttk.Checkbutton(frame, text="启用告警", variable=alerts_var).pack(anchor="w")
         start_var = tk.BooleanVar(value=self.config_data.get("start_minimized", False))
         ttk.Checkbutton(frame, text="启动后隐藏主窗口", variable=start_var).pack(anchor="w", pady=(6, 0))
+        mini_start_var = tk.BooleanVar(value=self.config_data.get("show_mini_on_start", True))
+        ttk.Checkbutton(frame, text="启动后显示迷你窗", variable=mini_start_var).pack(anchor="w", pady=(6, 0))
+        mini_top_var = tk.BooleanVar(value=self.config_data.get("mini_topmost", True))
+        ttk.Checkbutton(frame, text="迷你窗置顶", variable=mini_top_var).pack(anchor="w", pady=(6, 0))
 
         help_text = "提示：登录 zchat 后按 F12，在 Console 输入 document.cookie，复制整段内容粘贴即可。"
         ttk.Label(frame, text=help_text, wraplength=520, foreground="#64748b").pack(anchor="w", pady=(14, 12))
@@ -495,6 +567,8 @@ class QuotaApp(tk.Tk):
                     "alert_balance_below": float(balance_alert_var.get().strip()),
                     "alerts_enabled": bool(alerts_var.get()),
                     "start_minimized": bool(start_var.get()),
+                    "show_mini_on_start": bool(mini_start_var.get()),
+                    "mini_topmost": bool(mini_top_var.get()),
                 })
             except ValueError:
                 messagebox.showerror("设置错误", "套餐 ID、刷新间隔和告警阈值必须是数字。")
