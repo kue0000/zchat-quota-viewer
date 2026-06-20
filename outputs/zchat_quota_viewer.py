@@ -202,6 +202,80 @@ class QuotaRing(tk.Canvas):
         self.create_text(self.size / 2, self.size / 2 + 26, text="剩余", fill="#64748b", font=("Microsoft YaHei UI", 9))
 
 
+class HeroDashboard(tk.Canvas):
+    def __init__(self, parent, **kwargs):
+        super().__init__(parent, height=245, bg=kwargs.get("bg", "#f3f6fb"), highlightthickness=0)
+        self.data = None
+        self.bind("<Configure>", lambda _event: self.draw())
+
+    def set_data(self, data):
+        self.data = data
+        self.draw()
+
+    def round_rect(self, x1, y1, x2, y2, radius, **kwargs):
+        points = [
+            x1 + radius, y1,
+            x2 - radius, y1,
+            x2, y1,
+            x2, y1 + radius,
+            x2, y2 - radius,
+            x2, y2,
+            x2 - radius, y2,
+            x1 + radius, y2,
+            x1, y2,
+            x1, y2 - radius,
+            x1, y1 + radius,
+            x1, y1,
+        ]
+        return self.create_polygon(points, smooth=True, **kwargs)
+
+    def draw(self):
+        self.delete("all")
+        w = max(self.winfo_width(), 620)
+        h = 245
+        margin = 6
+        self.round_rect(margin, margin, w - margin, h - margin, 24, fill="#0f172a", outline="")
+        self.create_rectangle(margin + 8, margin + 8, w - margin - 8, h // 2, fill="#172554", outline="")
+        self.create_oval(w - 260, -120, w + 80, 220, fill="#1d4ed8", outline="")
+        self.create_oval(w - 190, 36, w + 40, 270, fill="#0ea5e9", outline="")
+
+        if not self.data or not self.data.get("active"):
+            self.create_text(34, 42, text="ZCHAT 额度", anchor="w", fill="#e5e7eb", font=("Microsoft YaHei UI", 18, "bold"))
+            self.create_text(34, 102, text="等待刷新", anchor="w", fill="#ffffff", font=("Microsoft YaHei UI", 34, "bold"))
+            return
+
+        active = self.data["active"]
+        remaining = self.data["high_remaining"]
+        total = active["high_total"]
+        used = active["high_used"]
+        percent_remaining = quota_percent(remaining, total)
+        percent_used = quota_percent(used, total)
+        balance = self.data["balance"] if self.data["balance"] is not None else "--"
+
+        self.create_text(34, 34, text=active["title"], anchor="w", fill="#bfdbfe", font=("Microsoft YaHei UI", 12, "bold"))
+        self.create_text(34, 88, text=f"{remaining}", anchor="w", fill="#ffffff", font=("Microsoft YaHei UI", 46, "bold"))
+        self.create_text(34 + 110, 92, text="次高级额度剩余", anchor="w", fill="#dbeafe", font=("Microsoft YaHei UI", 13))
+        self.create_text(36, 130, text=f"已用 {used} / {total} 次 · {percent_used:.0f}%", anchor="w", fill="#cbd5e1", font=("Microsoft YaHei UI", 11))
+
+        ring_x = w - 150
+        ring_y = 112
+        r = 58
+        self.create_oval(ring_x - r, ring_y - r, ring_x + r, ring_y + r, outline="#60a5fa", width=13)
+        extent = max(0.1, min(359.9, percent_remaining / 100 * 360))
+        self.create_arc(ring_x - r, ring_y - r, ring_x + r, ring_y + r, start=90, extent=-extent, outline="#ffffff", width=13, style="arc")
+        self.create_text(ring_x, ring_y - 4, text=f"{percent_remaining:.0f}%", fill="#ffffff", font=("Microsoft YaHei UI", 22, "bold"))
+        self.create_text(ring_x, ring_y + 24, text="剩余率", fill="#dbeafe", font=("Microsoft YaHei UI", 9))
+
+        pill_text = "额度充足" if remaining > 20 else "注意额度"
+        pill_fill = "#dcfce7" if remaining > 20 else "#ffedd5"
+        pill_fg = "#166534" if remaining > 20 else "#9a3412"
+        self.round_rect(34, 166, 122, 198, 14, fill=pill_fill, outline="")
+        self.create_text(78, 182, text=pill_text, fill=pill_fg, font=("Microsoft YaHei UI", 9, "bold"))
+
+        self.create_text(150, 178, text=f"免费额度 {active['free_used']} / {active['free_total']} 次", anchor="w", fill="#e0f2fe", font=("Microsoft YaHei UI", 10))
+        self.create_text(150, 202, text=f"余额 {balance}", anchor="w", fill="#e0f2fe", font=("Microsoft YaHei UI", 10))
+
+
 def quota_summary(user, vip_levels, config):
     rows = build_vip_rows(user, vip_levels)
     active, source = choose_active_row(rows, user, config)
@@ -324,24 +398,20 @@ class QuotaApp(tk.Tk):
         ttk.Button(actions, text="设置", command=self.open_settings).grid(row=1, column=0, padx=4, pady=3)
         ttk.Button(actions, text="复制数据", command=self.copy_raw).grid(row=1, column=1, padx=4, pady=3)
 
-        self.plan_card = ttk.Frame(shell, padding=22, style="Hero.TFrame")
-        self.plan_card.pack(fill="x", pady=(14, 0))
-        hero_left = ttk.Frame(self.plan_card, style="Hero.TFrame")
-        hero_left.pack(side="left", fill="both", expand=True)
-        self.plan_label = ttk.Label(hero_left, text="当前套餐 --", style="Section.TLabel")
-        self.plan_label.pack(anchor="w")
-        self.high_value = ttk.Label(hero_left, text="-- 次", style="Metric.TLabel")
-        self.high_value.pack(anchor="w", pady=(8, 0))
-        self.high_detail = ttk.Label(hero_left, text="高级额度等待刷新", style="SubMetric.TLabel")
-        self.high_detail.pack(anchor="w", pady=(4, 0))
-        self.free_detail = ttk.Label(hero_left, text="免费额度等待刷新", style="Muted.TLabel")
-        self.free_detail.pack(anchor="w", pady=(10, 0))
-        self.status_pill = ttk.Label(hero_left, text="等待刷新", style="Pill.TLabel")
-        self.status_pill.pack(anchor="w", pady=(14, 0))
-        hero_right = ttk.Frame(self.plan_card, style="Hero.TFrame")
-        hero_right.pack(side="right", padx=(18, 0))
-        self.quota_ring = QuotaRing(hero_right, size=142)
-        self.quota_ring.pack()
+        self.hero_dashboard = HeroDashboard(shell)
+        self.hero_dashboard.pack(fill="x", pady=(14, 0))
+
+        self.summary_card = ttk.Frame(shell, padding=16, style="Card.TFrame")
+        self.summary_card.pack(fill="x", pady=(14, 0))
+        self.plan_label = ttk.Label(self.summary_card, text="当前套餐 --", style="Section.TLabel")
+        self.plan_label.grid(row=0, column=0, sticky="w")
+        self.high_detail = ttk.Label(self.summary_card, text="高级额度等待刷新", style="SubMetric.TLabel")
+        self.high_detail.grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.free_detail = ttk.Label(self.summary_card, text="免费额度等待刷新", style="SubMetric.TLabel")
+        self.free_detail.grid(row=1, column=1, sticky="w", padx=(26, 0), pady=(8, 0))
+        self.status_pill = ttk.Label(self.summary_card, text="等待刷新", style="Pill.TLabel")
+        self.status_pill.grid(row=0, column=1, sticky="e")
+        self.summary_card.columnconfigure(0, weight=1)
 
         info = ttk.Frame(shell, padding=18, style="Card.TFrame")
         info.pack(fill="x", pady=(14, 0))
@@ -355,7 +425,7 @@ class QuotaApp(tk.Tk):
 
         table_card = ttk.Frame(shell, padding=18, style="Card.TFrame")
         table_card.pack(fill="both", expand=True, pady=(14, 0))
-        ttk.Label(table_card, text="VIP 额度表", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(table_card, text="套餐额度对比", style="Section.TLabel").pack(anchor="w")
         columns = ("id", "title", "price", "high", "free")
         self.vip_tree = ttk.Treeview(table_card, columns=columns, show="headings", height=8)
         headings = {"id": "ID", "title": "套餐", "price": "价格", "high": "高级额度", "free": "免费额度"}
@@ -416,14 +486,13 @@ class QuotaApp(tk.Tk):
             high_remaining = data["high_remaining"]
             free_remaining = data["free_remaining"]
             self.plan_label.configure(text=f"当前套餐：{active['title']} (ID {active['id']})")
-            self.high_value.configure(text=f"{high_remaining} 次")
-            self.quota_ring.set_value(high_remaining, active["high_total"])
             self.high_detail.configure(text=f"高级额度 {active['high_used']} / {active['high_total']} 次 · 已用 {high_percent:.0f}%")
             self.free_detail.configure(text=f"免费额度 {active['free_used']} / {active['free_total']} 次 · 剩余 {free_remaining} 次")
             if high_remaining <= self.config_data.get("alert_high_remaining", 20):
                 self.status_pill.configure(text="额度偏低")
             else:
                 self.status_pill.configure(text="额度充足")
+        self.hero_dashboard.set_data(data)
         self.balance_label.configure(text=f"余额：{data['balance'] if data['balance'] is not None else '--'}")
         source_text = {"auto": "接口自动", "manual": "手动 ID", "fallback": "回退首项", "none": "未识别"}.get(data["plan_source"], data["plan_source"])
         self.source_label.configure(text=f"套餐识别：{source_text}")
