@@ -38,7 +38,7 @@ DEFAULT_CONFIG = {
     "alerts_enabled": True,
     "start_minimized": False,
     "show_mini_on_start": True,
-    "mini_topmost": True,
+    "mini_topmost": False,
 }
 
 VIP_IDS = {
