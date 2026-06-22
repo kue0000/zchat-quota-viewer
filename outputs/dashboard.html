@@ -1,0 +1,1133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZCHAT 额度仪表盘</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  :root {
+    --bg-primary: #0f172a;
+    --bg-card: #1e293b;
+    --bg-card-hover: #243247;
+    --bg-elevated: #273548;
+    --border-color: #334155;
+    --border-subtle: #1e293b;
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --accent-blue: #3b82f6;
+    --accent-blue-dim: rgba(59, 130, 246, 0.15);
+    --accent-green: #22c55e;
+    --accent-green-dim: rgba(34, 197, 94, 0.15);
+    --accent-orange: #f59e0b;
+    --accent-orange-dim: rgba(245, 158, 11, 0.15);
+    --accent-red: #ef4444;
+    --accent-red-dim: rgba(239, 68, 68, 0.12);
+    --accent-purple: #a78bfa;
+    --accent-cyan: #22d3ee;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --radius-xl: 20px;
+    --shadow-card: 0 1px 3px rgba(0,0,0,0.3), 0 4px 20px rgba(0,0,0,0.15);
+    --shadow-glow-blue: 0 0 30px rgba(59,130,246,0.12);
+    --transition-fast: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-smooth: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    --font-stack: 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html {
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    font-family: var(--font-stack);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  /* === Background Pattern === */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(59,130,246,0.08), transparent),
+      radial-gradient(ellipse 60% 40% at 80% 100%, rgba(139,92,246,0.05), transparent);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .app-container {
+    position: relative;
+    z-index: 1;
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 24px 48px;
+  }
+
+  /* === HEADER === */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 0;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .header-logo {
+    width: 38px;
+    height: 38px;
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 15px;
+    letter-spacing: -0.5px;
+    color: #fff;
+    flex-shrink: 0;
+  }
+
+  .header-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.3px;
+  }
+
+  .header-user {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 1px;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+
+  .header-time {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: right;
+    line-height: 1.5;
+  }
+
+  .countdown-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 100px;
+    padding: 2px 10px;
+    margin-top: 3px;
+  }
+
+  .countdown-badge .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-green);
+    animation: pulse-dot 2s infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .btn-refresh {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    white-space: nowrap;
+  }
+
+  .btn-refresh:hover {
+    background: var(--bg-card-hover);
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+  }
+
+  .btn-refresh:active { transform: scale(0.97); }
+
+  .btn-refresh svg {
+    width: 14px;
+    height: 14px;
+    transition: transform 0.5s ease;
+  }
+
+  .btn-refresh.spinning svg {
+    transform: rotate(360deg);
+  }
+
+  /* === HERO SECTION === */
+  .hero {
+    background: linear-gradient(135deg, #1a2744 0%, #1e293b 50%, #1a2540 100%);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-xl);
+    padding: 40px 44px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 40px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-card), var(--shadow-glow-blue);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -20%;
+    width: 60%;
+    height: 200%;
+    background: radial-gradient(ellipse, rgba(59,130,246,0.06), transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero-content {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .hero-label {
+    font-size: 14px;
+    color: var(--text-muted);
+    font-weight: 500;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .hero-label .icon-bolt {
+    color: var(--accent-orange);
+    font-size: 16px;
+  }
+
+  .hero-number {
+    font-size: 72px;
+    font-weight: 800;
+    letter-spacing: -3px;
+    line-height: 1;
+    margin-bottom: 12px;
+    background: linear-gradient(135deg, var(--text-primary) 30%, var(--accent-blue) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    transition: opacity var(--transition-smooth);
+  }
+
+  .hero-sub {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 18px;
+  }
+
+  .hero-sub span { color: var(--text-muted); }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 14px;
+    border-radius: 100px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .status-pill.ok {
+    background: var(--accent-green-dim);
+    color: var(--accent-green);
+    border: 1px solid rgba(34,197,94,0.2);
+  }
+
+  .status-pill.warn {
+    background: var(--accent-orange-dim);
+    color: var(--accent-orange);
+    border: 1px solid rgba(245,158,11,0.2);
+  }
+
+  .status-pill.danger {
+    background: var(--accent-red-dim);
+    color: var(--accent-red);
+    border: 1px solid rgba(239,68,68,0.2);
+  }
+
+  .status-pill .pill-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .hero-chart {
+    position: relative;
+    width: 200px;
+    height: 200px;
+    flex-shrink: 0;
+  }
+
+  .hero-chart canvas {
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  .chart-center-label {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+  }
+
+  .chart-center-label .pct {
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--text-primary);
+    letter-spacing: -1px;
+  }
+
+  .chart-center-label .pct-sign {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  .chart-center-label .pct-label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  /* === METRIC CARDS === */
+  .metrics-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .metric-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    transition: all var(--transition-fast);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .metric-card:hover {
+    border-color: var(--text-muted);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-card);
+  }
+
+  .metric-card .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+
+  .metric-card .card-title {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .metric-card .card-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+  }
+
+  .card-icon.blue { background: var(--accent-blue-dim); color: var(--accent-blue); }
+  .card-icon.green { background: var(--accent-green-dim); color: var(--accent-green); }
+  .card-icon.purple { background: rgba(167,139,250,0.12); color: var(--accent-purple); }
+
+  .metric-value {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1.1;
+    margin-bottom: 4px;
+    transition: color var(--transition-fast);
+  }
+
+  .metric-value.blue { color: var(--accent-blue); }
+  .metric-value.orange { color: var(--accent-orange); }
+  .metric-value.green { color: var(--accent-green); }
+
+  .metric-sub {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .metric-sub .muted { color: var(--text-muted); }
+
+  .mini-progress {
+    height: 4px;
+    background: var(--bg-primary);
+    border-radius: 100px;
+    margin-top: 14px;
+    overflow: hidden;
+  }
+
+  .mini-progress .bar {
+    height: 100%;
+    border-radius: 100px;
+    transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .bar.green { background: var(--accent-green); }
+  .bar.blue { background: var(--accent-blue); }
+  .bar.orange { background: var(--accent-orange); }
+  .bar.red { background: var(--accent-red); }
+
+  .plan-detail {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .plan-detail .plan-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .plan-detail .plan-row span:last-child {
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+
+  /* === TABLE === */
+  .table-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin-bottom: 32px;
+  }
+
+  .table-section-header {
+    padding: 20px 24px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .table-section-header h2 {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .table-section-header .badge {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 100px;
+    padding: 3px 10px;
+  }
+
+  .plans-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .plans-table thead th {
+    padding: 10px 24px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: var(--bg-primary);
+    border-top: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .plans-table thead th:first-child { padding-left: 24px; }
+  .plans-table thead th:last-child { padding-right: 24px; }
+
+  .plans-table tbody td {
+    padding: 16px 24px;
+    font-size: 14px;
+    color: var(--text-secondary);
+    border-bottom: 1px solid rgba(51,65,85,0.4);
+    vertical-align: middle;
+  }
+
+  .plans-table tbody tr:last-child td { border-bottom: none; }
+
+  .plans-table tbody tr {
+    transition: background var(--transition-fast);
+  }
+
+  .plans-table tbody tr:hover {
+    background: rgba(51,65,85,0.15);
+  }
+
+  .plans-table tbody tr.active-row {
+    background: var(--accent-blue-dim);
+  }
+
+  .plans-table tbody tr.active-row:hover {
+    background: rgba(59,130,246,0.18);
+  }
+
+  .plan-name-cell {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .plan-name-cell .name {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .active-badge {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--accent-blue);
+    background: var(--accent-blue-dim);
+    border: 1px solid rgba(59,130,246,0.25);
+    border-radius: 100px;
+    padding: 2px 8px;
+    letter-spacing: 0.3px;
+  }
+
+  .price-cell {
+    font-weight: 700;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .price-cell .yuan { color: var(--text-muted); font-weight: 500; font-size: 12px; }
+
+  .quota-cell {
+    min-width: 160px;
+  }
+
+  .quota-cell-text {
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+  }
+
+  .quota-cell-text .used { color: var(--text-primary); font-weight: 600; }
+  .quota-cell-text .sep { color: var(--text-muted); }
+  .quota-cell-text .total { color: var(--text-muted); }
+
+  .inline-progress {
+    height: 4px;
+    background: var(--bg-primary);
+    border-radius: 100px;
+    overflow: hidden;
+    max-width: 140px;
+  }
+
+  .inline-progress .bar {
+    height: 100%;
+    border-radius: 100px;
+    transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* === FOOTER === */
+  .footer {
+    text-align: center;
+    padding: 16px 0 0;
+    font-size: 12px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border-color);
+  }
+
+  .footer a {
+    color: var(--accent-blue);
+    text-decoration: none;
+  }
+
+  .footer a:hover { text-decoration: underline; }
+
+  /* === LOADING STATE === */
+  .skeleton {
+    background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-elevated) 50%, var(--bg-card) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s ease-in-out infinite;
+    border-radius: var(--radius-sm);
+  }
+
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  .skeleton-text { height: 16px; margin-bottom: 8px; }
+  .skeleton-title { height: 48px; width: 200px; margin-bottom: 12px; }
+  .skeleton-chart { width: 200px; height: 200px; border-radius: 50%; }
+
+  /* === ERROR STATE === */
+  .error-container {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 80px 24px;
+    text-align: center;
+  }
+
+  .error-container.visible {
+    display: flex;
+  }
+
+  .error-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: var(--accent-red-dim);
+    color: var(--accent-red);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    margin-bottom: 20px;
+  }
+
+  .error-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+
+  .error-msg {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+    max-width: 400px;
+  }
+
+  .btn-retry {
+    padding: 10px 28px;
+    background: var(--accent-blue);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .btn-retry:hover { background: #2563eb; transform: translateY(-1px); }
+  .btn-retry:active { transform: scale(0.97); }
+
+  /* === MAIN CONTENT (togglable) === */
+  .main-content { display: none; }
+  .main-content.visible { display: block; }
+
+  /* === RESPONSIVE === */
+  @media (max-width: 900px) {
+    .hero {
+      flex-direction: column;
+      padding: 32px 28px;
+      text-align: center;
+    }
+    .hero-content { align-items: center; display: flex; flex-direction: column; }
+    .hero-number { font-size: 56px; }
+    .hero-chart { width: 170px; height: 170px; }
+    .metrics-row { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 760px) {
+    .app-container { padding: 0 16px 32px; }
+    .header { padding: 16px 0; }
+    .hero { padding: 24px 20px; }
+    .hero-number { font-size: 48px; letter-spacing: -2px; }
+    .plans-table thead th,
+    .plans-table tbody td { padding: 12px 14px; font-size: 12px; }
+    .quota-cell { min-width: 120px; }
+  }
+
+  /* === UTILITY ANIMATIONS === */
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .fade-in {
+    animation: fade-in 0.5s ease forwards;
+  }
+
+  .fade-in-delay-1 { animation-delay: 0.1s; opacity: 0; }
+  .fade-in-delay-2 { animation-delay: 0.2s; opacity: 0; }
+  .fade-in-delay-3 { animation-delay: 0.3s; opacity: 0; }
+  .fade-in-delay-4 { animation-delay: 0.4s; opacity: 0; }
+</style>
+</head>
+<body>
+<div class="app-container">
+
+  <!-- HEADER -->
+  <header class="header">
+    <div class="header-left">
+      <div class="header-logo">Z</div>
+      <div>
+        <div class="header-title">ZCHAT 额度仪表盘</div>
+        <div class="header-user" id="headerUser">加载中...</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="header-time">
+        <div id="refreshTime">--</div>
+        <div class="countdown-badge">
+          <span class="dot"></span>
+          <span id="countdownText">60s 后刷新</span>
+        </div>
+      </div>
+      <button class="btn-refresh" id="btnRefresh" onclick="manualRefresh()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"></polyline>
+          <polyline points="1 20 1 14 7 14"></polyline>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+        刷新
+      </button>
+    </div>
+  </header>
+
+  <!-- ERROR STATE -->
+  <div class="error-container" id="errorContainer">
+    <div class="error-icon">!</div>
+    <div class="error-title">无法连接到数据服务</div>
+    <div class="error-msg" id="errorMsg">请确认本地服务已启动，并检查端口配置是否正确。</div>
+    <button class="btn-retry" onclick="manualRefresh()">重新连接</button>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <div class="main-content" id="mainContent">
+
+    <!-- HERO -->
+    <section class="hero fade-in">
+      <div class="hero-content">
+        <div class="hero-label">
+          <span class="icon-bolt">&#9889;</span> 高级额度剩余
+        </div>
+        <div class="hero-number" id="heroNumber">--</div>
+        <div class="hero-sub" id="heroSub">
+          已用 <span>--</span> / <span>--</span> 次 &middot; <span>--</span>%
+        </div>
+        <div id="statusPill"></div>
+      </div>
+      <div class="hero-chart">
+        <canvas id="doughnutChart"></canvas>
+        <div class="chart-center-label">
+          <span class="pct" id="chartPct">--</span><span class="pct-sign">%</span>
+          <span class="pct-label">已使用</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- METRICS ROW -->
+    <div class="metrics-row">
+      <!-- Balance Card -->
+      <div class="metric-card fade-in fade-in-delay-1">
+        <div class="card-header">
+          <span class="card-title">账户余额</span>
+          <div class="card-icon blue">&#165;</div>
+        </div>
+        <div class="metric-value blue" id="balanceValue">--</div>
+        <div class="metric-sub muted">当前可用余额</div>
+      </div>
+
+      <!-- Free Quota Card -->
+      <div class="metric-card fade-in fade-in-delay-2">
+        <div class="card-header">
+          <span class="card-title">免费额度</span>
+          <div class="card-icon green">&#10003;</div>
+        </div>
+        <div class="metric-value" id="freeValue" style="color:var(--text-primary);">--</div>
+        <div class="metric-sub" id="freeSub">
+          <span class="muted">已用 / 总额度</span>
+        </div>
+        <div class="mini-progress">
+          <div class="bar green" id="freeBar" style="width:0%"></div>
+        </div>
+      </div>
+
+      <!-- Plan Info Card -->
+      <div class="metric-card fade-in fade-in-delay-3">
+        <div class="card-header">
+          <span class="card-title">套餐信息</span>
+          <div class="card-icon purple">&#9733;</div>
+        </div>
+        <div class="metric-value" id="planName" style="color:var(--accent-purple); font-size:22px; letter-spacing:-0.5px;">--</div>
+        <div class="plan-detail" id="planDetail">
+          <div class="plan-row"><span>价格</span><span id="planPrice">--</span></div>
+          <div class="plan-row"><span>有效期</span><span id="planDays">--</span></div>
+          <div class="plan-row"><span>来源</span><span id="planSource">--</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PLANS TABLE -->
+    <div class="table-section fade-in fade-in-delay-4">
+      <div class="table-section-header">
+        <h2>套餐对比</h2>
+        <span class="badge" id="tableBadge">-- 个套餐</span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="plans-table">
+          <thead>
+            <tr>
+              <th>套餐名称</th>
+              <th>价格</th>
+              <th>高级额度</th>
+              <th>免费额度</th>
+            </tr>
+          </thead>
+          <tbody id="plansTableBody">
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- FOOTER -->
+    <footer class="footer">
+      <a href="https://www.zchat.tech" target="_blank" rel="noopener">ZCHAT</a> Quota Viewer &middot; 数据每 5 分钟自动刷新
+    </footer>
+  </div>
+
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // --- State ---
+  let chart = null;
+  let countdownInterval = null;
+  let countdown = 60;
+  let currentData = null;
+  let isInitialLoad = true;
+
+  // --- Config ---
+  const REFRESH_INTERVAL = 60; // seconds
+  const params = new URLSearchParams(window.location.search);
+  const PORT = params.get('port') || '18932';
+  const API_URL = `http://localhost:${PORT}/api/data`;
+
+  // --- Init ---
+  document.addEventListener('DOMContentLoaded', () => {
+    initChart();
+    fetchData();
+  });
+
+  // --- Chart.js Init ---
+  function initChart() {
+    const ctx = document.getElementById('doughnutChart').getContext('2d');
+    chart = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: ['已使用', '剩余'],
+        datasets: [{
+          data: [0, 100],
+          backgroundColor: ['#3b82f6', 'rgba(51,65,85,0.4)'],
+          borderWidth: 0,
+          borderRadius: 6,
+          spacing: 3,
+        }]
+      },
+      options: {
+        cutout: '75%',
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+          legend: { display: false },
+          tooltip: { enabled: false }
+        },
+        animation: {
+          animateRotate: true,
+          duration: 800,
+          easing: 'easeOutQuart'
+        }
+      }
+    });
+  }
+
+  // --- Fetch Data ---
+  async function fetchData() {
+    const btn = document.getElementById('btnRefresh');
+    btn.classList.add('spinning');
+
+    try {
+      const resp = await fetch(API_URL, { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      currentData = data;
+      renderAll(data);
+      hideError();
+    } catch (err) {
+      console.error('Fetch failed:', err);
+      if (isInitialLoad || !currentData) {
+        showError(err.message);
+      }
+      // If we have stale data, keep showing it
+    } finally {
+      btn.classList.remove('spinning');
+      isInitialLoad = false;
+      resetCountdown();
+    }
+  }
+
+  // --- Render All ---
+  function renderAll(data) {
+    const mainContent = document.getElementById('mainContent');
+    mainContent.classList.add('visible');
+
+    // Header
+    const name = data.name || '未知用户';
+    const email = data.email || '';
+    document.getElementById('headerUser').textContent = `${name}${email ? ' · ' + email : ''}`;
+    document.getElementById('refreshTime').textContent = data.updated_at ? `更新于 ${data.updated_at}` : '--';
+
+    // Active plan data
+    const active = data.active || {};
+    const highUsed = active.high_used || 0;
+    const highTotal = active.high_total || 0;
+    const highRemaining = data.high_remaining != null ? data.high_remaining : Math.max(0, highTotal - highUsed);
+    const highPct = highTotal > 0 ? Math.round((highUsed / highTotal) * 100) : 0;
+    const remainPct = 100 - highPct;
+
+    // Hero
+    animateNumber('heroNumber', highRemaining);
+    document.getElementById('heroSub').innerHTML =
+      `已用 <strong>${highUsed}</strong> / <strong>${highTotal}</strong> 次 &middot; <strong>${highPct}</strong>%`;
+
+    // Status pill
+    const pill = document.getElementById('statusPill');
+    if (highRemaining <= 0) {
+      pill.innerHTML = '<div class="status-pill danger"><span class="pill-dot"></span>额度已耗尽</div>';
+    } else if (remainPct < 20) {
+      pill.innerHTML = '<div class="status-pill warn"><span class="pill-dot"></span>注意额度</div>';
+    } else {
+      pill.innerHTML = '<div class="status-pill ok"><span class="pill-dot"></span>额度充足</div>';
+    }
+
+    // Chart
+    chart.data.datasets[0].data = [highPct, remainPct];
+    if (highPct > 80) {
+      chart.data.datasets[0].backgroundColor = ['#ef4444', 'rgba(51,65,85,0.4)'];
+    } else if (highPct > 60) {
+      chart.data.datasets[0].backgroundColor = ['#f59e0b', 'rgba(51,65,85,0.4)'];
+    } else {
+      chart.data.datasets[0].backgroundColor = ['#3b82f6', 'rgba(51,65,85,0.4)'];
+    }
+    chart.update();
+    document.getElementById('chartPct').textContent = highPct;
+
+    // Balance
+    const balance = data.balance != null ? data.balance : 0;
+    const balEl = document.getElementById('balanceValue');
+    balEl.textContent = `¥${balance.toFixed(2)}`;
+    balEl.className = 'metric-value ' + (balance < 10 ? 'orange' : 'blue');
+
+    // Free Quota
+    const freeUsed = active.free_used || 0;
+    const freeTotal = active.free_total || 0;
+    const freeRemaining = data.free_remaining != null ? data.free_remaining : Math.max(0, freeTotal - freeUsed);
+    const freePct = freeTotal > 0 ? Math.round((freeUsed / freeTotal) * 100) : 0;
+
+    document.getElementById('freeValue').textContent = `${freeRemaining} 次`;
+    document.getElementById('freeSub').innerHTML = `已用 <strong>${freeUsed}</strong> / ${freeTotal} 次`;
+    const freeBar = document.getElementById('freeBar');
+    freeBar.style.width = freePct + '%';
+    freeBar.className = 'bar ' + (freePct > 80 ? 'red' : freePct > 60 ? 'orange' : 'green');
+
+    // Plan Info
+    document.getElementById('planName').textContent = active.title || '无套餐';
+    document.getElementById('planPrice').textContent = active.price ? `¥${active.price}` : '--';
+    document.getElementById('planDays').textContent = active.days ? `${active.days} 天` : '--';
+    const sourceMap = { manual: '手动分配', auto: '自动', purchase: '购买' };
+    document.getElementById('planSource').textContent = sourceMap[data.plan_source] || data.plan_source || '--';
+
+    // Table
+    renderTable(data.rows || [], active.id);
+    document.getElementById('tableBadge').textContent = `${(data.rows || []).length} 个套餐`;
+  }
+
+  // --- Render Table ---
+  function renderTable(rows, activeId) {
+    const tbody = document.getElementById('plansTableBody');
+    tbody.innerHTML = '';
+
+    rows.forEach(row => {
+      const isActive = row.id === activeId;
+      const tr = document.createElement('tr');
+      if (isActive) tr.classList.add('active-row');
+
+      const highPct = row.high_total > 0 ? Math.min(100, Math.round((row.high_used / row.high_total) * 100)) : 0;
+      const freePct = row.free_total > 0 ? Math.min(100, Math.round((row.free_used / row.free_total) * 100)) : 0;
+
+      const highBarColor = highPct > 90 ? 'red' : highPct > 70 ? 'orange' : 'blue';
+      const freeBarColor = freePct > 90 ? 'red' : freePct > 70 ? 'orange' : 'green';
+
+      tr.innerHTML = `
+        <td>
+          <div class="plan-name-cell">
+            <span class="name">${escapeHtml(row.title)}</span>
+            ${isActive ? '<span class="active-badge">当前</span>' : ''}
+          </div>
+        </td>
+        <td class="price-cell"><span class="yuan">¥</span>${escapeHtml(row.price || '0')}</td>
+        <td class="quota-cell">
+          <div class="quota-cell-text">
+            <span class="used">${row.high_used}</span>
+            <span class="sep">/</span>
+            <span class="total">${row.high_total} 次</span>
+          </div>
+          <div class="inline-progress">
+            <div class="bar ${highBarColor}" style="width:${highPct}%"></div>
+          </div>
+        </td>
+        <td class="quota-cell">
+          <div class="quota-cell-text">
+            <span class="used">${row.free_used}</span>
+            <span class="sep">/</span>
+            <span class="total">${row.free_total} 次</span>
+          </div>
+          <div class="inline-progress">
+            <div class="bar ${freeBarColor}" style="width:${freePct}%"></div>
+          </div>
+        </td>
+      `;
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  // --- Animate Number ---
+  function animateNumber(elId, target) {
+    const el = document.getElementById(elId);
+    const current = parseInt(el.textContent) || 0;
+    const diff = target - current;
+    if (diff === 0) { el.textContent = target; return; }
+
+    const steps = 30;
+    const stepTime = 400 / steps;
+    let step = 0;
+
+    const timer = setInterval(() => {
+      step++;
+      const progress = step / steps;
+      const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+      el.textContent = Math.round(current + diff * eased);
+      if (step >= steps) {
+        clearInterval(timer);
+        el.textContent = target;
+      }
+    }, stepTime);
+  }
+
+  // --- Countdown ---
+  function resetCountdown() {
+    countdown = REFRESH_INTERVAL;
+    if (countdownInterval) clearInterval(countdownInterval);
+    updateCountdownDisplay();
+    countdownInterval = setInterval(() => {
+      countdown--;
+      updateCountdownDisplay();
+      if (countdown <= 0) {
+        fetchData();
+      }
+    }, 1000);
+  }
+
+  function updateCountdownDisplay() {
+    document.getElementById('countdownText').textContent = `${countdown}s 后刷新`;
+  }
+
+  // --- Manual Refresh ---
+  window.manualRefresh = function() {
+    fetchData();
+  };
+
+  // --- Error Handling ---
+  function showError(msg) {
+    document.getElementById('errorContainer').classList.add('visible');
+    document.getElementById('mainContent').classList.remove('visible');
+    document.getElementById('errorMsg').textContent =
+      `无法连接到 ${API_URL}。请确认本地服务已启动，并检查端口配置是否正确。(${msg})`;
+  }
+
+  function hideError() {
+    document.getElementById('errorContainer').classList.remove('visible');
+  }
+
+  // --- Utility ---
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+})();
+</script>
+</body>
+</html>

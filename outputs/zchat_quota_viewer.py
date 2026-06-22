@@ -1,13 +1,25 @@
 import json
 import os
 import re
+import socket
+import sys
 import threading
 import time
 import tkinter as tk
 import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+# Optional: system tray (pystray + Pillow)
+try:
+    import pystray
+    from PIL import Image, ImageDraw, ImageFont
+    HAS_TRAY = True
+except ImportError:
+    HAS_TRAY = False
 
 
 APP_NAME = "ZCHAT Quota Viewer"
@@ -300,48 +312,268 @@ def quota_summary(user, vip_levels, config):
     return result
 
 
+# ---------------------------------------------------------------------------
+# Dashboard HTTP server
+# ---------------------------------------------------------------------------
+DASHBOARD_PORT = 18932
+DASHBOARD_HTML_NAME = "dashboard.html"
+_server_data_store = {"payload": None, "lock": threading.Lock()}
+
+
+def _find_free_port(preferred=18932):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", preferred))
+        s.close()
+        return preferred
+    except OSError:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return port
+
+
+class _DashboardHandler(BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        pass  # silence console spam
+
+    def do_GET(self):
+        if self.path.startswith("/api/data"):
+            with _server_data_store["lock"]:
+                payload = _server_data_store["payload"]
+            if payload is None:
+                self._json_response({"error": "no data yet"}, 503)
+                return
+            safe = {k: v for k, v in payload.items() if k not in ("raw_user", "raw_vip")}
+            self._json_response(safe)
+        elif self.path == "/" or self.path.startswith("/index") or self.path.startswith("/dashboard"):
+            html_path = Path(__file__).parent / DASHBOARD_HTML_NAME
+            if html_path.exists():
+                content = html_path.read_bytes()
+            else:
+                content = b"<h1>dashboard.html not found</h1>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(content)
+        else:
+            self.send_error(404)
+
+    def _json_response(self, obj, code=200):
+        body = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def start_dashboard_server(port=None):
+    port = port or DASHBOARD_PORT
+    port = _find_free_port(port)
+    server = HTTPServer(("127.0.0.1", port), _DashboardHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, port
+
+
+def update_server_data(payload):
+    with _server_data_store["lock"]:
+        _server_data_store["payload"] = payload
+
+
+# ---------------------------------------------------------------------------
+# System tray (optional)
+# ---------------------------------------------------------------------------
+def _create_tray_icon_image():
+    """Create a simple 64x64 tray icon: blue circle with 'Z' letter."""
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse([2, 2, 62, 62], fill="#1d4ed8")
+    try:
+        font = ImageFont.truetype("arial.ttf", 36)
+    except Exception:
+        font = ImageFont.load_default()
+    bbox = draw.textbbox((0, 0), "Z", font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text(((64 - tw) / 2 - bbox[0], (64 - th) / 2 - bbox[1]), "Z", fill="#ffffff", font=font)
+    return img
+
+
+def _build_tray_tooltip(data):
+    if not data or not data.get("active"):
+        return "ZCHAT Quota Viewer"
+    active = data["active"]
+    remaining = data.get("high_remaining", "--")
+    balance = data.get("balance")
+    bal_str = f"\u00a5{balance:.2f}" if isinstance(balance, (int, float)) else "--"
+    return f"{active['title']} | {remaining}/{active['high_total']} | {bal_str}"
+
+
+def create_system_tray(app):
+    """Create and run a pystray icon in a daemon thread. Returns the icon or None."""
+    if not HAS_TRAY:
+        return None
+
+    icon_img = _create_tray_icon_image()
+    tooltip = "ZCHAT Quota Viewer"
+
+    def on_open(icon, item):
+        app.after(0, app.deiconify)
+
+    def on_refresh(icon, item):
+        app.after(0, app.refresh)
+
+    def on_quit(icon, item):
+        icon.stop()
+        app.after(0, app.destroy)
+
+    menu = pystray.Menu(
+        pystray.MenuItem("打开主窗口", on_open, default=True),
+        pystray.MenuItem("刷新数据", on_refresh),
+        pystray.MenuItem("退出", on_quit),
+    )
+    icon = pystray.Icon("zchat_quota", icon_img, tooltip, menu)
+    threading.Thread(target=icon.run, daemon=True).start()
+    return icon
+
+
+# ---------------------------------------------------------------------------
+# Bookmarklet generator
+# ---------------------------------------------------------------------------
+BOOKMARKLET_JS = """javascript:void(function(){var c=document.cookie;var m=c.match(/(?:^|[;\\s])token=([^;\\s]+)/);if(m){prompt('ZCHAT Token (Ctrl+C to copy):',m[1])}else{alert('No token found. Please log in to zchat.tech first.')}})();"""
+
+
 class MiniWindow(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
         self.title("ZCHAT Mini")
-        self.geometry("300x168")
-        self.resizable(False, False)
-        self.configure(bg="#111827")
+        self.overrideredirect(True)
+        self.configure(bg="#0f172a")
         self.attributes("-topmost", parent.config_data.get("mini_topmost", True))
         self.protocol("WM_DELETE_WINDOW", self.withdraw)
-        frame = tk.Frame(self, bg="#111827", padx=16, pady=14)
-        frame.pack(fill="both", expand=True)
-        self.title_label = tk.Label(frame, text="ZCHAT", fg="#e5e7eb", bg="#111827", font=("Microsoft YaHei UI", 12, "bold"))
-        self.title_label.pack(anchor="w")
-        self.high_label = tk.Label(frame, text="-- 次剩余", fg="#ffffff", bg="#111827", font=("Microsoft YaHei UI", 24, "bold"))
-        self.high_label.pack(anchor="w", pady=(6, 0))
-        self.detail_label = tk.Label(frame, text="高级额度 -- / --", fg="#93c5fd", bg="#111827", font=("Microsoft YaHei UI", 10))
-        self.detail_label.pack(anchor="w")
-        self.free_label = tk.Label(frame, text="免费额度 -- / --", fg="#cbd5e1", bg="#111827", font=("Microsoft YaHei UI", 9))
-        self.free_label.pack(anchor="w", pady=(8, 0))
-        self.balance_label = tk.Label(frame, text="余额 --", fg="#cbd5e1", bg="#111827", font=("Microsoft YaHei UI", 9))
-        self.balance_label.pack(anchor="w")
+
+        self.canvas = tk.Canvas(self, width=320, height=180, bg="#0f172a", highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+
+        # Drag support
+        self._drag_x = 0
+        self._drag_y = 0
+        self.canvas.bind("<ButtonPress-1>", self._on_drag_start)
+        self.canvas.bind("<B1-Motion>", self._on_drag_motion)
+
+        # Right-click context menu (overrideredirect removes the close button)
+        self._ctx_menu = tk.Menu(self, tearoff=0)
+        self._ctx_menu.add_command(label="隐藏迷你窗", command=self.withdraw)
+        self._ctx_menu.add_command(label="刷新数据", command=lambda: self.parent.refresh())
+        self.canvas.bind("<ButtonPress-3>", self._show_ctx_menu)
+
         self.position_near_corner()
         self.withdraw()
 
+    def _on_drag_start(self, event):
+        self._drag_x = event.x
+        self._drag_y = event.y
+
+    def _on_drag_motion(self, event):
+        x = self.winfo_x() + event.x - self._drag_x
+        y = self.winfo_y() + event.y - self._drag_y
+        self.geometry(f"+{x}+{y}")
+
+    def _show_ctx_menu(self, event):
+        self._ctx_menu.post(self.winfo_rootx() + event.x, self.winfo_rooty() + event.y)
+
     def position_near_corner(self):
         self.update_idletasks()
-        width = self.winfo_width() or 300
-        height = self.winfo_height() or 168
-        x = max(0, self.winfo_screenwidth() - width - 28)
+        x = max(0, self.winfo_screenwidth() - 320 - 28)
         y = 72
-        self.geometry(f"{width}x{height}+{x}+{y}")
+        self.geometry(f"320x180+{x}+{y}")
+
+    def _round_rect(self, x1, y1, x2, y2, r, **kw):
+        pts = [x1+r, y1, x2-r, y1, x2, y1, x2, y1+r,
+               x2, y2-r, x2, y2, x2-r, y2, x1+r, y2,
+               x1, y2, x1, y2-r, x1, y1+r, x1, y1]
+        return self.canvas.create_polygon(pts, smooth=True, **kw)
+
+    def _fmt_balance(self, val):
+        if val is None:
+            return "--"
+        if isinstance(val, float):
+            return f"\u00a5{val:.2f}"
+        return f"\u00a5{val}"
 
     def update_data(self, data):
         active = data.get("active")
         if not active:
             return
-        self.title_label.configure(text=active["title"])
-        self.high_label.configure(text=f"{data['high_remaining']} 次剩余")
-        self.detail_label.configure(text=f"高级额度 {active['high_used']} / {active['high_total']} 次")
-        self.free_label.configure(text=f"免费额度 {active['free_used']} / {active['free_total']} 次")
-        self.balance_label.configure(text=f"余额 {data['balance'] if data['balance'] is not None else '--'}")
+        self.canvas.delete("all")
+        W, H = 320, 180
+        m = 6
+
+        # Background card
+        self._round_rect(m, m, W - m, H - m, 16, fill="#1e293b", outline="")
+
+        # Title bar
+        self.canvas.create_text(m + 14, 22, text=active["title"],
+                                anchor="w", fill="#94a3b8", font=("Microsoft YaHei UI", 9, "bold"))
+
+        # ---- Left block: remaining quota ----
+        blk_l = m + 6
+        blk_r = 154
+        self._round_rect(blk_l, 38, blk_r, 128, 12, fill="#0f172a", outline="")
+        cx_l = (blk_l + blk_r) / 2
+        remaining = max(0, data["high_remaining"]) if data["high_remaining"] is not None else 0
+        remain_color = "#4ade80" if remaining > 20 else "#fb923c"
+        self.canvas.create_text(cx_l, 62, text=str(remaining),
+                                fill="#ffffff", font=("Microsoft YaHei UI", 28, "bold"))
+        self.canvas.create_text(cx_l, 92, text="\u6b21\u5269\u4f59",
+                                fill="#94a3b8", font=("Microsoft YaHei UI", 10))
+        used = active["high_used"]
+        total = active["high_total"]
+        over = used > total
+        usage_text = f"{used}/{total}" + ("\u26a0" if over else "")
+        self.canvas.create_text(cx_l, 114, text=usage_text,
+                                fill="#f87171" if over else "#64748b",
+                                font=("Microsoft YaHei UI", 9))
+
+        # ---- Right block: balance ----
+        blk_l2 = 162
+        blk_r2 = W - m - 6
+        self._round_rect(blk_l2, 38, blk_r2, 128, 12, fill="#0f172a", outline="")
+        cx_r = (blk_l2 + blk_r2) / 2
+        balance = data["balance"]
+        balance_str = self._fmt_balance(balance)
+        balance_color = "#60a5fa" if (balance is not None and balance >= 10) else "#fb923c"
+        bal_font_size = 20 if len(balance_str) > 6 else 22
+        self.canvas.create_text(cx_r, 62, text=balance_str,
+                                fill=balance_color, font=("Microsoft YaHei UI", bal_font_size, "bold"))
+        self.canvas.create_text(cx_r, 92, text="\u8d26\u6237\u4f59\u989d",
+                                fill="#94a3b8", font=("Microsoft YaHei UI", 10))
+        free_text = f"\u514d\u8d39 {active['free_used']}/{active['free_total']}"
+        self.canvas.create_text(cx_r, 114, text=free_text,
+                                fill="#64748b", font=("Microsoft YaHei UI", 9))
+
+        # ---- Bottom status bar ----
+        remain_pct = quota_percent(remaining, total) if total else 0
+        used_pct = min(100, quota_percent(used, total)) if total else 0
+        bar_y = 140
+        bar_x1, bar_x2 = m + 12, W - m - 12
+        bar_h = 6
+        self._round_rect(bar_x1, bar_y, bar_x2, bar_y + bar_h, 3, fill="#334155", outline="")
+        fill_w = max(4, (bar_x2 - bar_x1) * remain_pct / 100)
+        self._round_rect(bar_x1, bar_y, bar_x1 + fill_w, bar_y + bar_h, 3, fill=remain_color, outline="")
+
+        status = "\u989d\u5ea6\u5145\u8db3" if remaining > 20 else "\u6ce8\u610f\u989d\u5ea6"
+        status_fg = "#4ade80" if remaining > 20 else "#fb923c"
+        self.canvas.create_text(m + 14, 160, text=status, anchor="w",
+                                fill=status_fg, font=("Microsoft YaHei UI", 8, "bold"))
+        self.canvas.create_text(W - m - 14, 160, text=f"\u5df2\u7528 {used_pct:.0f}%", anchor="e",
+                                fill="#64748b", font=("Microsoft YaHei UI", 8))
 
 
 class QuotaApp(tk.Tk):
@@ -357,6 +589,24 @@ class QuotaApp(tk.Tk):
         self.last_payload = None
         self.last_alert_key = None
         self.mini = None
+        self.tray_icon = None
+        self.token_failed_at = None
+
+        # Start dashboard HTTP server
+        self.dashboard_port = None
+        self.dashboard_server = None
+        try:
+            self.dashboard_server, self.dashboard_port = start_dashboard_server()
+        except Exception:
+            pass
+
+        # System tray (optional)
+        self.tray_icon = create_system_tray(self)
+
+        # If tray is available, closing the window minimizes to tray
+        if self.tray_icon:
+            self.protocol("WM_DELETE_WINDOW", self._minimize_to_tray)
+
         self.create_widgets()
         if self.config_data.get("show_mini_on_start", True):
             self.after(300, self.show_mini)
@@ -364,6 +614,13 @@ class QuotaApp(tk.Tk):
             self.after(200, self.withdraw)
         self.refresh()
         self.schedule_next()
+
+    def _minimize_to_tray(self):
+        """Hide main window when tray is available; quit if no tray."""
+        if self.tray_icon:
+            self.withdraw()
+        else:
+            self.destroy()
 
     def create_widgets(self):
         style = ttk.Style()
@@ -397,6 +654,8 @@ class QuotaApp(tk.Tk):
         ttk.Button(actions, text="迷你窗", command=self.toggle_mini).grid(row=0, column=1, padx=4, pady=3)
         ttk.Button(actions, text="设置", command=self.open_settings).grid(row=1, column=0, padx=4, pady=3)
         ttk.Button(actions, text="复制数据", command=self.copy_raw).grid(row=1, column=1, padx=4, pady=3)
+        self.dashboard_btn = ttk.Button(actions, text="仪表盘", command=self.open_dashboard)
+        self.dashboard_btn.grid(row=2, column=0, columnspan=2, padx=4, pady=3, sticky="ew")
 
         self.hero_dashboard = HeroDashboard(shell)
         self.hero_dashboard.pack(fill="x", pady=(14, 0))
@@ -501,6 +760,19 @@ class QuotaApp(tk.Tk):
         if self.mini:
             self.mini.update_data(data)
 
+        # Push data to HTTP server for dashboard
+        update_server_data(data)
+
+        # Update system tray tooltip
+        if self.tray_icon:
+            try:
+                self.tray_icon.title = _build_tray_tooltip(data)
+            except Exception:
+                pass
+
+        # Successful refresh clears token failure state
+        self.token_failed_at = None
+
     def render_rows(self, data):
         active = data.get("active") or {}
         self.vip_tree.delete(*self.vip_tree.get_children())
@@ -550,7 +822,18 @@ class QuotaApp(tk.Tk):
         self.loading = False
         self.status_label.configure(text=text)
         if "401" in text or "403" in text:
-            messagebox.showwarning("登录失效", "token 可能已过期，请重新登录 zchat 后更新 token。")
+            self.token_failed_at = time.time()
+            messagebox.showwarning("Token 已失效",
+                                   "token 可能已过期或无效。\n\n"
+                                   "请在浏览器登录 zchat.tech，按 F12 打开 Console，\n"
+                                   "输入 document.cookie 复制整段内容，\n"
+                                   "然后在设置里粘贴更新 token。")
+
+    def open_dashboard(self):
+        if self.dashboard_port:
+            webbrowser.open(f"http://127.0.0.1:{self.dashboard_port}/")
+        else:
+            messagebox.showinfo("仪表盘", "HTTP 服务未启动，无法打开仪表盘。")
 
     def toggle_mini(self):
         if self.mini is None or not self.mini.winfo_exists():
@@ -573,7 +856,7 @@ class QuotaApp(tk.Tk):
     def open_settings(self):
         dialog = tk.Toplevel(self)
         dialog.title("设置")
-        dialog.geometry("560x620")
+        dialog.geometry("560x780")
         dialog.transient(self)
         dialog.grab_set()
         frame = ttk.Frame(dialog, padding=16)
@@ -618,7 +901,48 @@ class QuotaApp(tk.Tk):
         mini_top_var = tk.BooleanVar(value=self.config_data.get("mini_topmost", True))
         ttk.Checkbutton(frame, text="迷你窗置顶", variable=mini_top_var).pack(anchor="w", pady=(6, 0))
 
-        help_text = "提示：登录 zchat 后按 F12，在 Console 输入 document.cookie，复制整段内容粘贴即可。"
+        # Token status
+        token_status_frame = ttk.Frame(frame)
+        token_status_frame.pack(fill="x", pady=(14, 0))
+        if self.token_failed_at:
+            elapsed = time.time() - self.token_failed_at
+            ago = f"{int(elapsed / 60)} 分钟前" if elapsed < 3600 else f"{int(elapsed / 3600)} 小时前"
+            tk.Label(token_status_frame, text=f"Token 状态：已失效（{ago}）",
+                     fg="#dc2626", font=("Microsoft YaHei UI", 9, "bold")).pack(anchor="w")
+        elif self.config_data.get("token"):
+            tk.Label(token_status_frame, text="Token 状态：已配置（刷新成功即有效）",
+                     fg="#16a34a", font=("Microsoft YaHei UI", 9)).pack(anchor="w")
+        else:
+            tk.Label(token_status_frame, text="Token 状态：未配置",
+                     fg="#64748b", font=("Microsoft YaHei UI", 9)).pack(anchor="w")
+
+        # Bookmarklet
+        ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=(12, 8))
+        ttk.Label(frame, text="快捷取 Token（书签脚本）：",
+                  font=("Microsoft YaHei UI", 9, "bold")).pack(anchor="w")
+        bm_frame = ttk.Frame(frame)
+        bm_frame.pack(fill="x", pady=(4, 0))
+
+        def copy_bookmarklet():
+            self.clipboard_clear()
+            self.clipboard_append(BOOKMARKLET_JS)
+            messagebox.showinfo("书签脚本已复制",
+                                "使用方法：\n"
+                                "1. 在浏览器中创建新书签\n"
+                                "2. 名称填\"取 Token\"\n"
+                                "3. 网址栏粘贴刚复制的内容\n"
+                                "4. 登录 zchat 后点击该书签即可复制 token")
+
+        ttk.Button(bm_frame, text="复制书签脚本", command=copy_bookmarklet).pack(side="left")
+        ttk.Button(bm_frame, text="打开 ZCHAT", command=lambda: webbrowser.open(BASE_URL)).pack(side="left", padx=(8, 0))
+
+        # Dashboard server info
+        if self.dashboard_port:
+            ttk.Label(frame, text=f"仪表盘地址：http://127.0.0.1:{self.dashboard_port}/",
+                      foreground="#64748b", font=("Microsoft YaHei UI", 8)).pack(anchor="w", pady=(10, 0))
+
+        help_text = ("提示：登录 zchat 后按 F12，在 Console 输入 document.cookie，"
+                     "复制整段内容粘贴即可。或使用上方的书签脚本一键提取。")
         ttk.Label(frame, text=help_text, wraplength=520, foreground="#64748b").pack(anchor="w", pady=(14, 12))
 
         buttons = ttk.Frame(frame)
