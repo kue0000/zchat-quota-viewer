@@ -286,9 +286,15 @@ class HeroDashboard(tk.Canvas):
 
         self.create_text(150, 178, text=f"免费额度 {active['free_used']} / {active['free_total']} 次", anchor="w", fill="#e0f2fe", font=("Microsoft YaHei UI", 10))
         self.create_text(150, 202, text=f"余额 {balance}", anchor="w", fill="#e0f2fe", font=("Microsoft YaHei UI", 10))
+        expire = self.data.get("expire_time", "")
+        expire_display = f"到期：{expire[:10]}" if expire else "到期：长期有效"
+        expire_fill = "#e0f2fe" if expire else "#fbbf24"
+        self.create_text(300, 202, text=expire_display, anchor="w", fill=expire_fill, font=("Microsoft YaHei UI", 10))
 
 
-def quota_summary(user, vip_levels, config):
+def quota_summary(user, vip_levels, config=None, expire_time="", **_kw):
+    if config is None:
+        config = {}
     rows = build_vip_rows(user, vip_levels)
     active, source = choose_active_row(rows, user, config)
     balance = normalize_number(user.get("money"))
@@ -297,6 +303,7 @@ def quota_summary(user, vip_levels, config):
         "email": str(user.get("email") or ""),
         "balance": balance,
         "updated_at": str(user.get("updated_at") or ""),
+        "expire_time": expire_time,
         "active": active,
         "plan_source": source,
         "rows": rows,
@@ -521,6 +528,10 @@ class MiniWindow(tk.Toplevel):
         # Title bar
         self.canvas.create_text(m + 14, 22, text=active["title"],
                                 anchor="w", fill="#94a3b8", font=("Microsoft YaHei UI", 9, "bold"))
+        expire = data.get("expire_time", "")
+        if expire:
+            self.canvas.create_text(W - m - 14, 22, text=expire[:10],
+                                    anchor="e", fill="#64748b", font=("Microsoft YaHei UI", 8))
 
         # ---- Left block: remaining quota ----
         blk_l = m + 6
@@ -668,6 +679,8 @@ class QuotaApp(tk.Tk):
         self.high_detail.grid(row=1, column=0, sticky="w", pady=(8, 0))
         self.free_detail = ttk.Label(self.summary_card, text="免费额度等待刷新", style="SubMetric.TLabel")
         self.free_detail.grid(row=1, column=1, sticky="w", padx=(26, 0), pady=(8, 0))
+        self.expire_detail = ttk.Label(self.summary_card, text="到期时间等待刷新", style="SubMetric.TLabel")
+        self.expire_detail.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self.status_pill = ttk.Label(self.summary_card, text="等待刷新", style="Pill.TLabel")
         self.status_pill.grid(row=0, column=1, sticky="e")
         self.summary_card.columnconfigure(0, weight=1)
@@ -720,9 +733,16 @@ class QuotaApp(tk.Tk):
 
     def fetch_worker(self, token):
         try:
-            user = unwrap_response(api_post("api/get_user", token))
+            user_raw = api_post("api/get_user", token)
+            user = unwrap_response(user_raw)
             vip = unwrap_response(api_post("api/get_vip_level", token))
-            result = quota_summary(user, vip, self.config_data)
+            # Extract VIP expire_time from top-level vip object (before unwrap)
+            expire_time = ""
+            if isinstance(user_raw, dict):
+                vip_obj = user_raw.get("vip")
+                if isinstance(vip_obj, dict):
+                    expire_time = str(vip_obj.get("expire_time") or "")
+            result = quota_summary(user, vip, config=self.config_data, expire_time=expire_time)
             self.after(0, lambda: self.apply_result(result))
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -747,6 +767,14 @@ class QuotaApp(tk.Tk):
             self.plan_label.configure(text=f"当前套餐：{active['title']} (ID {active['id']})")
             self.high_detail.configure(text=f"高级额度 {active['high_used']} / {active['high_total']} 次 · 已用 {high_percent:.0f}%")
             self.free_detail.configure(text=f"免费额度 {active['free_used']} / {active['free_total']} 次 · 剩余 {free_remaining} 次")
+            expire = data.get("expire_time", "")
+            if expire:
+                display = expire[:10]
+                if len(expire) > 16:
+                    display += f"  ({expire[11:16]})"
+                self.expire_detail.configure(text=f"到期时间：{display}")
+            else:
+                self.expire_detail.configure(text="到期时间：长期有效")
             if high_remaining <= self.config_data.get("alert_high_remaining", 20):
                 self.status_pill.configure(text="额度偏低")
             else:
